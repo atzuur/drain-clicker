@@ -1,0 +1,5 @@
+make.exe --dry-run --always-make --keep-going --print-directory
+make: Entering directory 'c:/GitHub/drain-clicker'
+gcc main.c -o drain.exe -municode -lgdi32 -g
+make: Leaving directory 'c:/GitHub/drain-clicker'
+ 
