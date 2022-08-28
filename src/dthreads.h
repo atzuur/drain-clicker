@@ -1,4 +1,4 @@
-// thx to luminance for making dis
+// thx to luminance for making some of dis
 // https://github.com/unknownopponent/C_Simple_Tread
 
 
@@ -9,21 +9,21 @@
 #include <windows.h>
 
 
-typedef struct A_Thread {
+typedef struct Dthread {
 	void(*function);
 	void* args;
 	HANDLE thread_handle;
 
-} A_Thread;
+} DThread;
 
 
-char ath_create(A_Thread* thread);
-char ath_join(A_Thread* thread, int* return_code);
+char dth_create(DThread* thread);
+char dth_join(DThread* thread, int* return_code);
 
-void ath_exit(int ret);
+void dth_exit(int ret);
 
 
-inline char ath_create(A_Thread* thread) {
+inline char dth_create(DThread* thread) {
 
 	assert(thread->function != 0);
 
@@ -39,7 +39,7 @@ inline char ath_create(A_Thread* thread) {
 }
 
 
-inline char ath_join(A_Thread* thread, int* return_code) {
+inline char dth_join(DThread* thread, int* return_code) {
 
 	assert(thread->thread_handle);
 
@@ -69,6 +69,6 @@ inline char ath_join(A_Thread* thread, int* return_code) {
 }
 
 
-inline void ath_exit(int ret) {
+inline void dth_exit(int ret) {
 	ExitThread(ret);
 }

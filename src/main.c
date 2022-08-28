@@ -4,19 +4,11 @@
 #include <time.h>
 
 #include "drain.h"
-#include "athreads.h"
-
-
-#define ID_START 1
-#define ID_STOP 2
-#define ID_STATUS 3
-#define ID_INTERVAL 4
-#define G_KEY 0x47
-#define ERASE_LINE "\033[2K"
+#include "dthreads.h"
 
 int cur_threads = 0;
 BOOL stop = FALSE;
-int interval = 1000;
+int interval = 100;
 
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow) {
@@ -26,8 +18,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     WNDCLASS wc = { 0 };
 
     wc.style = CS_HREDRAW | CS_VREDRAW;
-    wc.lpfnWndProc   = WindowProc;
-    wc.hInstance     = hInstance;
+    wc.lpfnWndProc = WindowProc;
+    wc.hInstance = hInstance;
     wc.lpszClassName = class_name;
 
     if (!RegisterClass(&wc)) {
@@ -39,16 +31,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     int height = GetSystemMetrics(SM_CYSCREEN) / 3;
 
     HWND window = CreateWindowEx(
-        WS_EX_CLIENTEDGE, class_name, L"windwo yay", WS_OVERLAPPEDWINDOW,
+        WS_EX_CLIENTEDGE, class_name, L"drain clicker :100:", WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT, width, height, // position and size
         NULL, NULL, hInstance, NULL
     );
-
-    interval = _wtoi(pCmdLine);
-
-    if (interval == 0) {
-        interval = 1000;
-    }
 
     if (!window) {
         return 1;
@@ -78,6 +64,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
 
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+
+    ClickerData *data = malloc(sizeof(ClickerData));
+    data->interval = interval;
+    data->hwnd = hwnd;
 
     switch (uMsg) {
 
@@ -143,12 +133,14 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             }
 
             RAWINPUT *raw = (RAWINPUT *)lpb;
-            if (get_pressed_key(raw, 'g')) {
-                stop_clicking(hwnd);
-            }
 
             if (get_pressed_key(raw, 'r')) {
-                start_clicking(&interval, hwnd);
+                if (cur_threads == 0) {
+                    init_clicker_thread(data);
+                }
+                else {
+                    stop_clicking(hwnd);
+                }
             }
 
             free(lpb);
@@ -158,7 +150,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         case WM_COMMAND: {
 
             if (LOWORD(wParam) == ID_START) {
-                init_clicker_thread(&interval, hwnd);
+                init_clicker_thread(data);
             }
 
             if (LOWORD(wParam) == ID_STOP) {
@@ -174,33 +166,32 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 }
 
 
-void init_clicker_thread(int *interval, HWND hwnd) {
+void init_clicker_thread(ClickerData *data) {
 
-    if (cur_threads == 0) { 
+    if (cur_threads == 0) {
 
         stop = FALSE;
 
-        A_Thread click_t = { 0 };
+        DThread click_t = { 0 };
         click_t.function = start_clicking;
-        click_t.args = &interval, hwnd; // TODO: make struct for args
+        click_t.args = data;
 
-        if (ath_create(&click_t) == 0) {
+        if (dth_create(&click_t) == 0) {
             cur_threads++;
         }
 
         else {
-            MessageBox(hwnd, L"Could not create thread", L"Error", MB_OK);
+            MessageBox(data->hwnd, L"Could not create thread", L"Error", MB_OK);
         }
 
-        // change status text to "Clicking"
-        SetDlgItemText(hwnd, ID_STATUS, L"Clicking");
+        // change title text to "Clicking"
+        SetDlgItemText(data->hwnd, ID_STATUS, L"Clicking");
     }
 
     else {
-        MessageBox(hwnd, L"Already clicking", L"Error", MB_OK);
+        MessageBox(data->hwnd, L"Already clicking", L"Error", MB_OK);
     }
 }
-
 
 
 void stop_clicking(HWND hwnd) {
@@ -216,16 +207,18 @@ void stop_clicking(HWND hwnd) {
 }
 
 
-void start_clicking(const int *interval_ms, HWND hwnd) {
+void start_clicking(const ClickerData *data) {
 
-    while (!stop) {
+    while (1) {
 
-        if (left_click() != 0) {
-            MessageBox(hwnd, L"Left click failed", L"Error", MB_OK);
+        Sleep(data->interval);
+
+        if (!stop) {
+            left_click();
+        }
+        else {
             break;
         }
-
-        Sleep(*interval_ms);
     }
 
     printf("exiting thread\n");
@@ -249,17 +242,12 @@ int left_click() {
     inputs[1].mi.dwFlags = MOUSEEVENTF_LEFTUP;
 
     UINT sent = SendInput(ARRAYSIZE(inputs), inputs, sizeof(INPUT));
-
-    if (sent != ARRAYSIZE(inputs)) {
-        return 1;
-    }
-
-    return 0;
+    return sent != ARRAYSIZE(inputs); // 0 if successful
 }
 
 
-BOOL get_pressed_key(RAWINPUT *raw, const char key) {
-    
+BOOL get_pressed_key(const RAWINPUT *raw, const char key) {
+
     if (raw->header.dwType == RIM_TYPEKEYBOARD &&
         raw->data.keyboard.Message == WM_KEYDOWN) {
 
