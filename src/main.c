@@ -1,261 +1,140 @@
-#include <windows.h>
-#include <stdlib.h>
+#ifndef _WIN32
+#error Windows 32/64 only
+#endif
+
 #include <stdio.h>
+#include <stdlib.h>
 #include <time.h>
+#include <windows.h>
 
-#include "drain.h"
-#include "dthreads.h"
+static HANDLE lmbEvent = NULL;
+static int avgDelay = 0;
+static WCHAR toggleKey = L'x';
+static BOOL toggled = FALSE;
 
-int cur_threads = 0;
-BOOL stop = FALSE;
-int interval = 100;
+LRESULT WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
 
-
-int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow) {
-
-    const wchar_t *class_name = L"Clicker";
-
-    WNDCLASS wc = { 0 };
-
-    wc.style = CS_HREDRAW | CS_VREDRAW;
-    wc.lpfnWndProc = WindowProc;
-    wc.hInstance = hInstance;
-    wc.lpszClassName = class_name;
-
-    if (!RegisterClass(&wc)) {
-        return 1;
-    }
-
-    // monitor res / 3
-    int width  = GetSystemMetrics(SM_CXSCREEN) / 3;
-    int height = GetSystemMetrics(SM_CYSCREEN) / 3;
-
-    HWND window = CreateWindowEx(
-        WS_EX_CLIENTEDGE, class_name, L"drain clicker :100:", WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT, width, height, // position and size
-        NULL, NULL, hInstance, NULL
-    );
-
-    if (!window) {
-        return 1;
-    }
-
-    ShowWindow(window, nCmdShow);
-
-    // raw input for hotkeys (toggle)
-    RAWINPUTDEVICE rid = { 0 };
-    rid.dwFlags = RIDEV_NOLEGACY | RIDEV_INPUTSINK;
-    rid.hwndTarget = window;
-    rid.usUsagePage = 1;
-    rid.usUsage = 6; // keyboard usage class
-
-    if (!RegisterRawInputDevices(&rid, 1, sizeof(rid))) {
-        return 1;
-    }
-
-    MSG msg = { 0 };
-    while (GetMessage(&msg, NULL, 0, 0) > 0) {
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
-    }
-
-    return 0;
-}
-
-
-LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-
-    ClickerData *data = malloc(sizeof(ClickerData));
-    data->interval = interval;
-    data->hwnd = hwnd;
-
-    switch (uMsg) {
-
-        case WM_DESTROY:
-            PostQuitMessage(0);
-            return 0;
-
-        case WM_PAINT: {
-
-            PAINTSTRUCT ps;
-            HDC hdc = BeginPaint(hwnd, &ps);
-
-            FillRect(hdc, &ps.rcPaint, (HBRUSH)(COLOR_WINDOW + 1));
-
-            EndPaint(hwnd, NULL);
-
-            return 0;
-        }
-
-        case WM_CREATE: {
-
-            CreateWindowW(L"STATIC", L"Not Clicking",
-                WS_VISIBLE | WS_CHILD | SS_CENTER,
-                240, 50, 100, 25,
-                hwnd, (HMENU)ID_STATUS, NULL,  NULL);
-
-            // wchar_t *buffer = malloc(sizeof(L"Interval: ") + sizeof(int));
-            // wsprintf(buffer, L"Interval: %d", interval);
-
-            // CreateWindowW(L"STATIC", L"Interval: ",
-            //     WS_VISIBLE | WS_CHILD | SS_CENTER,
-            //     350, 50, 100, 25,
-            //     hwnd, (HMENU)ID_INTERVAL, NULL,  NULL);
-
-            // free(buffer);
-
-            CreateWindowW(L"Button", L"Start clicking",
-                WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
-                20, 50, 100, 25,
-                hwnd, (HMENU)ID_START, NULL, NULL);
-
-            CreateWindowW(L"Button", L"Stop clicking",
-                WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
-                130, 50, 100, 25,
-                hwnd, (HMENU)ID_STOP, NULL, NULL);
-
-            break;
-        }
-
+    switch (message) {
         case WM_INPUT: {
-
             UINT dwSize;
 
             GetRawInputData((HRAWINPUT)lParam, RID_INPUT, NULL, &dwSize, sizeof(RAWINPUTHEADER));
             LPBYTE lpb = malloc(sizeof(BYTE) * dwSize);
-            if (lpb == NULL) {
-                return 1;
-            }
+            if (lpb == NULL)
+                return 0;
 
-            if (GetRawInputData((HRAWINPUT)lParam, RID_INPUT, lpb, &dwSize, sizeof(RAWINPUTHEADER)) != dwSize) {
+            if (GetRawInputData((HRAWINPUT)lParam, RID_INPUT, lpb, &dwSize,
+                                sizeof(RAWINPUTHEADER)) != dwSize) {
                 free(lpb);
                 break;
             }
 
-            RAWINPUT *raw = (RAWINPUT *)lpb;
+            RAWINPUT* raw = (RAWINPUT*)lpb;
 
-            if (get_pressed_key(raw, 'r')) {
-                if (cur_threads == 0) {
-                    init_clicker_thread(data);
+            if (raw->header.dwType == RIM_TYPEKEYBOARD &&
+                raw->data.keyboard.Message == WM_KEYDOWN) {
+
+                UINT key = MapVirtualKeyA(raw->data.keyboard.VKey, MAPVK_VK_TO_CHAR);
+
+                if (key == toggleKey || towlower(key) == towlower(toggleKey)) {
+                    toggled = !toggled;
+                    if (!toggled)
+                        ResetEvent(lmbEvent);
                 }
-                else {
-                    stop_clicking(hwnd);
+
+            } else if (raw->header.dwType == RIM_TYPEMOUSE && toggled) {
+                if (raw->data.mouse.usButtonFlags == RI_MOUSE_LEFT_BUTTON_DOWN) {
+                    SetEvent(lmbEvent);
+                } else if (raw->data.mouse.usButtonFlags == RI_MOUSE_LEFT_BUTTON_UP) {
+                    ResetEvent(lmbEvent);
                 }
             }
 
             free(lpb);
             break;
         }
-
-        case WM_COMMAND: {
-
-            if (LOWORD(wParam) == ID_START) {
-                init_clicker_thread(data);
-            }
-
-            if (LOWORD(wParam) == ID_STOP) {
-                stop_clicking(hwnd);
-            }
-
-            break;
-        }
-
         default:
-            return DefWindowProc(hwnd, uMsg, wParam, lParam);
+            return DefWindowProc(hwnd, message, wParam, lParam);
     }
+
+    return 0;
 }
 
+void Clicker() {
 
-void init_clicker_thread(ClickerData *data) {
-
-    if (cur_threads == 0) {
-
-        stop = FALSE;
-
-        DThread click_t = { 0 };
-        click_t.function = start_clicking;
-        click_t.args = data;
-
-        if (dth_create(&click_t) == 0) {
-            cur_threads++;
-        }
-
-        else {
-            MessageBox(data->hwnd, L"Could not create thread", L"Error", MB_OK);
-        }
-
-        // change title text to "Clicking"
-        SetDlgItemText(data->hwnd, ID_STATUS, L"Clicking");
-    }
-
-    else {
-        MessageBox(data->hwnd, L"Already clicking", L"Error", MB_OK);
-    }
-}
-
-
-void stop_clicking(HWND hwnd) {
-
-    if (cur_threads > 0) {
-        stop = TRUE;
-        SetDlgItemText(hwnd, ID_STATUS, L"Not clicking");
-    }
-
-    else {
-        MessageBox(hwnd, L"Clicker Inactive", L"Error", MB_OK);
-    }
-}
-
-
-void start_clicking(const ClickerData *data) {
+    BOOL shouldDouble = FALSE;
+    INPUT input = {0};
+    input.type = INPUT_MOUSE;
+    input.mi.dwFlags = MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_LEFTUP;
 
     while (1) {
+        WaitForSingleObject(lmbEvent, INFINITE);
 
-        Sleep(data->interval);
+        shouldDouble = (rand() % 10) > 1; // 80% chance of double click
+        if (shouldDouble) {
+            Sleep(rand() % 4 + 3); // 3-7 ms
+            SendInput(1, &input, sizeof(INPUT));
+        }
 
-        if (!stop) {
-            left_click();
-        }
-        else {
-            break;
-        }
+        SendInput(1, &input, sizeof(INPUT));
+        Sleep(avgDelay + (rand() % avgDelay / 4));
     }
-
-    printf("exiting thread\n");
-    cur_threads--;
-    ExitThread(0);
 }
 
+int wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR pCmdLine, int nCmdShow) {
 
-int left_click() {
+    srand(time(NULL));
 
-    INPUT inputs[2];
+    WNDCLASSA wclass = {0};
+    wclass.hInstance = hInstance;
+    wclass.lpfnWndProc = WndProc;
+    wclass.lpszClassName = "dc";
 
-    inputs[0].type = INPUT_MOUSE;
-    inputs[0].mi.dx = 0;
-    inputs[0].mi.dy = 0;
+    if (!RegisterClassA(&wclass))
+        return 1;
 
-    // copy values
-    inputs[0] = inputs[1];
+    HWND hwnd = CreateWindowA(wclass.lpszClassName, NULL, 0, 0, 0, 0, 0, 0, NULL, hInstance, NULL);
+    if (!hwnd)
+        return 1;
 
-    inputs[0].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
-    inputs[1].mi.dwFlags = MOUSEEVENTF_LEFTUP;
+    RAWINPUTDEVICE rid[2] = {0};
+    rid[0].dwFlags = RIDEV_NOLEGACY | RIDEV_INPUTSINK;
+    rid[0].hwndTarget = hwnd;
+    rid[0].usUsagePage = 1;
+    rid[0].usUsage = 2;
 
-    UINT sent = SendInput(ARRAYSIZE(inputs), inputs, sizeof(INPUT));
-    return sent != ARRAYSIZE(inputs); // 0 if successful
-}
+    rid[1].dwFlags = RIDEV_NOLEGACY | RIDEV_INPUTSINK;
+    rid[1].hwndTarget = hwnd;
+    rid[1].usUsagePage = 1;
+    rid[1].usUsage = 6;
 
+    if (!RegisterRawInputDevices(rid, 2, sizeof(RAWINPUTDEVICE)))
+        return 1;
 
-BOOL get_pressed_key(const RAWINPUT *raw, const char key) {
-
-    if (raw->header.dwType == RIM_TYPEKEYBOARD &&
-        raw->data.keyboard.Message == WM_KEYDOWN) {
-
-        UINT pressed = MapVirtualKeyA(raw->data.keyboard.VKey, MAPVK_VK_TO_CHAR);
-        if (pressed == key || pressed == toupper(key)) {
-            return TRUE;
-        }
+    int argc;
+    PWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (argc < 2) {
+        MessageBoxW(hwnd, L"Usage: draincl.exe <avg delay> <toggle key (default X)>",
+                    L"drain clicker", MB_OK);
+        return 1;
     }
 
-    return FALSE;
-} 
+    avgDelay = _wtoi(argv[1]);
+    if (argc >= 3)
+        toggleKey = argv[2][0];
+
+    lmbEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+    HANDLE clickThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)Clicker, NULL, 0, NULL);
+
+    MSG msg = {0};
+
+    while (GetMessage(&msg, hwnd, 0, 0) > 0) {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
+
+    CloseHandle(lmbEvent);
+    CloseHandle(clickThread);
+
+    return 0;
+}
