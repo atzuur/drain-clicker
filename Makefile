@@ -6,4 +6,4 @@ dev: src/main.c
 	gcc src/main.c -o $(outfile) -municode -g3
 
 release: src/main.c
-	gcc src/main.c -o $(outfile) -municode -mwindows -O2
+	gcc src/main.c -o $(outfile) -municode -O2
