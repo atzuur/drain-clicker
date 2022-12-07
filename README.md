@@ -1,5 +1,4 @@
 # drain-clicker
-shitty and unfinished autoclicker
 
 usage: `draincl.exe <avg delay> [<toggle key>]` (run in a terminal)
 
